@@ -22,21 +22,21 @@ def convert_state_to_abbreviation(state_value):
         return state_value 
 
 
-def fix_legal_name_format(legal_name):
+def fix_name_format(legal_name):
     try:
-        if "," in legal_name:
-            parts = legal_name.split(",")
-            if len(parts) == 2:
-                first_name = parts[1].strip()
-                last_name = parts[0].strip()
-                return f"{first_name.upper()} {last_name.upper()}"
+        # Split the name based on commas if present
+        parts = legal_name.split(",")
+        if len(parts) == 2:
+            first_name = parts[1].strip()
+            last_name = parts[0].strip()
+            return f"{first_name.upper()} {last_name.upper()}"
+        # If no commas, just return the name in uppercase
         return legal_name.upper()
     except Exception as e:
-        print(f"Error in fix_legal_name_format: {e}")
+        print(f"Error in fix_name_format: {e}")
         return legal_name.upper()
 
 # Main function to extract keys from the JSON sources
-import json
 
 def add_to_output(final_key, value, source_name, final_output):
     try:
@@ -50,23 +50,6 @@ def add_to_output(final_key, value, source_name, final_output):
     except Exception as e:
         print(f"Error in add_to_output: {e}")
 
-def extract_name_keys(source_name, source_data, final_output):
-    try:
-        for key, value in source_data.items():
-            if "Name" in key or "name" in key:
-                if key == "legal_name" or key == "Entity Name" or key == "LegalName":
-                    value = fix_legal_name_format(value)
-                add_to_output("Legal Name", value, source_name, final_output)
-    except Exception as e:
-        print(f"Error in extract_name_keys: {e}")
-
-def process_state_value(state_value):
-    try:
-        return convert_state_to_abbreviation(state_value)
-    except Exception as e:
-        print(f"Error in process_state_value: {e}")
-        return state_value  # Return the original state_value in case of error
-
 def process_source(source_name, source_data, keys_to_extract, final_output):
     try:
         for final_key, possible_keys in keys_to_extract.items():
@@ -74,11 +57,10 @@ def process_source(source_name, source_data, keys_to_extract, final_output):
                 if key in source_data:
                     value = source_data[key]
                     if final_key == "State":
-                        value = process_state_value(value)
+                        value = convert_state_to_abbreviation(value)
                     if final_key == "Legal Name":
-                        value = fix_legal_name_format(value)
+                        value = fix_name_format(value)
                     add_to_output(final_key, value, source_name, final_output)
-        extract_name_keys(source_name, source_data, final_output)
     except Exception as e:
         print(f"Error in process_source: {e}")
 
@@ -92,7 +74,12 @@ def extract_keys_from_sources(json_data):
                 return {}
 
         keys_to_extract = {
-            "Legal Name": ["legal_name", "Entity Name", "LegalName"],
+            "Entity Name":["Entity Name"],
+            "Trading Name":["Trading Name",],
+            "Name" : ["Name"],
+            "Company Name":["company_name","Company_Name","Company Name"],
+            "Business Name":["business_name", "Business Name", ],
+            "Legal Name": ["legal_name", "LegalName"],
             "ABR Entity Type": ["Entity Type"],
             "ABN": ["ABN"],
             "ACN": ["ASIC Number", "RegistrationAuthorityEntityID"],
@@ -147,6 +134,7 @@ def set_dynamic_probability(data):
                     })
 
             elif len(value_counts) == total_items:
+            
                 for item in items:
                     result.setdefault(key, []).append({
                         "value": item["value"],
@@ -165,15 +153,12 @@ def set_dynamic_probability(data):
 
                     if count == max_count and frequencies.count(max_count) == 1:
                         score = "High"
-                        # probability = 0.6
 
                     elif count > 1:
                         score = "Medium"
-                        # probability = 0.3
 
                     else:
                         score = "Low"
-                        # probability = 0.1
 
                     result.setdefault(key, []).append({
                         "value": value,
