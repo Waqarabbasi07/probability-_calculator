@@ -1,7 +1,11 @@
+import pandas as pd
 import json
 from collections import Counter
 
-# State abbreviation conversion
+# Pcode CSV path 
+csv_file_path = '/home/waqar/Downloads/geocoded_postcode_file.csv'
+postcode_df = pd.read_csv(csv_file_path)
+
 state_full_to_abbreviation = {
     "australian capital territory": "ACT",
     "new south wales": "NSW",
@@ -13,14 +17,12 @@ state_full_to_abbreviation = {
     "western australia": "WA",
 }
 
-
 def convert_state_to_abbreviation(state_value):
     try:
         return state_full_to_abbreviation.get(state_value.lower(), state_value)
     except Exception as e:
         print(f"Error in convert_state_to_abbreviation: {e}")
         return state_value 
-
 
 def fix_name_format(legal_name):
     try:
@@ -37,7 +39,6 @@ def fix_name_format(legal_name):
         return legal_name.upper()
 
 # Main function to extract keys from the JSON sources
-
 def add_to_output(final_key, value, source_name, final_output):
     try:
         value = str(value).upper()
@@ -52,15 +53,40 @@ def add_to_output(final_key, value, source_name, final_output):
 
 def process_source(source_name, source_data, keys_to_extract, final_output):
     try:
+        postcode_keys = ["Post Code", "Post code", "PostalCode", "Post_code", "Post_Code", "pcode", "Postal_Code", "Postal_code"]
+        
         for final_key, possible_keys in keys_to_extract.items():
             for key in possible_keys:
                 if key in source_data:
                     value = source_data[key]
+
+                    # Skip adding ABN if the source is tpbData
+                    if final_key == "ABN" and source_name == "tpbData":
+                        continue
+
                     if final_key == "State":
                         value = convert_state_to_abbreviation(value)
                     if final_key == "Legal Name":
                         value = fix_name_format(value)
+                    
                     add_to_output(final_key, value, source_name, final_output)
+
+        # if NOT tpbData and other postcode, match it with the CSV file
+        if source_name != "tpbData":
+            for key in postcode_keys:
+
+                if key in source_data:
+                    pcode = source_data.get(key)
+                    
+                    if pcode:
+                        pcode = int(pcode)                       
+                        locality_row = postcode_df[postcode_df['Pcode'] == pcode]
+                        if not locality_row.empty:
+                            locality = locality_row['Locality'].values[0]
+                            
+                            add_to_output("Locality", locality, source_name, final_output)
+                    break
+
     except Exception as e:
         print(f"Error in process_source: {e}")
 
@@ -74,12 +100,13 @@ def extract_keys_from_sources(json_data):
                 return {}
 
         keys_to_extract = {
-            "Entity Name":["Entity Name"],
-            "Trading Name":["Trading Name",],
-            "Name" : ["Name"],
-            "Company Name":["company_name","Company_Name","Company Name"],
-            "Business Name":["business_name", "Business Name", ],
-            "Legal Name": ["legal_name", "LegalName"],
+            "Suburb": ["Suburb"],
+            "Entity Name": ["Entity Name","EntityName"],
+            "Trading name": ["Trading Name",""],
+            "Name": ["Name"],
+            "Company Name": ["company_name","Company_Name","Company Name"],
+            "Business name": ["business_name", "Business Name","BusinessName"],
+            "Legal name": ["legal_name", "LegalName"],
             "ABR Entity Type": ["Entity Type"],
             "ABN": ["ABN"],
             "ACN": ["ASIC Number", "RegistrationAuthorityEntityID"],
@@ -89,10 +116,10 @@ def extract_keys_from_sources(json_data):
             "ABR Last Updated Date": ["recordLastConfirmedDate"],
             "GST Effective Date": ["Goods And Services Tax"],
             "ABR Last Confirmed Date": ["recordLastConfirmedDate"],
+            "Locality": ["Locality"],
         }
-
         final_output = {}
-
+        
         if "combinedResults" in json_data:
             try:
                 for source, source_data in json_data["combinedResults"].items():
@@ -110,7 +137,6 @@ def extract_keys_from_sources(json_data):
         print(f"Error in extract_keys_from_sources: {e}")
         return {}
 
-
 def set_dynamic_probability(data):
     result = {}
     score_order = {"High": 3, "Medium": 2, "Low": 1}
@@ -119,10 +145,8 @@ def set_dynamic_probability(data):
             value_counts = Counter([item["value"] for item in items])
             total_items = len(items)
             
-            # Determine the action logic based on the key
             action = ["ADD", "DELETE", "EDIT"] if key in ["State", "Postal code"] else ["DELETE"]
             if len(value_counts) == 1:
-                
                 count = value_counts[items[0]["value"]]
                 for item in items:
                     score = "High" if count > 1 else "Medium"
@@ -130,17 +154,16 @@ def set_dynamic_probability(data):
                         "value": item["value"],
                         "source": item["source"],
                         "score": score,
-                        "action": action  # Added here
+                        "action": action
                     })
 
             elif len(value_counts) == total_items:
-            
                 for item in items:
                     result.setdefault(key, []).append({
                         "value": item["value"],
                         "source": item["source"],
                         "score": "Low",
-                        "action": action  # Added here
+                        "action": action
                     })
 
             else:
@@ -153,10 +176,8 @@ def set_dynamic_probability(data):
 
                     if count == max_count and frequencies.count(max_count) == 1:
                         score = "High"
-
                     elif count > 1:
                         score = "Medium"
-
                     else:
                         score = "Low"
 
@@ -164,43 +185,36 @@ def set_dynamic_probability(data):
                         "value": value,
                         "source": item["source"],
                         "score": score,
-                        "action": action  # Added here
+                        "action": action
                     })
 
             result[key] = sorted(
                 result[key], key=lambda x: score_order[x["score"]], reverse=True
             )
+      
+        ordered_result = {}
+        priority_keys = ["Legal Name", "Entity Name", "Business Name"]
+      
+        for key in priority_keys:
+            if key in result:
+                ordered_result[key] = result.pop(key)
+        
+        for key in sorted(result.keys()):
+            if "Name" in key and key not in priority_keys:
+                ordered_result[key] = result.pop(key)
+
+        ordered_result.update(result)
+
     except Exception as e:
         print(f"An error occurred: {e}")
-    return result
-
+    return ordered_result
 
 def process_json_input(json_string):
     extracted_data = extract_keys_from_sources(json_string)
     updated_data = set_dynamic_probability(extracted_data)
     return updated_data
 
-json_input = """
-{
-    "combinedResults": {
-        "abrData": {
-            "ABN": "88765383115",
-            "Entity Status Code": "Active",
-            "Entity Type": "IND",
-            "Goods And Services Tax": "2000-07-01",
-            "State": "NSW",
-            "Post code": "2251",
-            "Entity Name": "GRANTHAM, ANTHONY"
-        },
-        "tpbData": {
-            "nid": "131316",
-            "Entity Type": "IND",
-            "legal_name": "Anthony Grantham",
-            "business_name": "Tony Grantham & Assoc",
-            "state": "New South Wales"
-        }
-    }
-}
-"""
+json_input = json_input = """"""
+
 response = process_json_input(json_input)
 print(json.dumps(response, indent=4))
