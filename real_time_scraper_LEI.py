@@ -1,8 +1,17 @@
 from fastapi import FastAPI, Query
 import requests
-import json
 
 app = FastAPI()
+
+def clean_empty_values(data):
+    """Recursively removes keys with empty strings, empty lists, or dictionaries with empty values from a dictionary."""
+    if isinstance(data, dict):
+        return {k: v for k, v in ((k, clean_empty_values(v)) for k, v in data.items())
+                if v not in ("", [], {}, [{}])}
+    elif isinstance(data, list):
+        return [clean_empty_values(item) for item in data if item not in ("", [], {}, [{}])]
+    else:
+        return data
 
 def get_lei_records(legal_name="", city="", postal_code=""):
     base_url = "https://api.gleif.org/api/v1/lei-records"
@@ -25,22 +34,23 @@ def get_lei_records(legal_name="", city="", postal_code=""):
             registration = attributes.get('registration', {})
 
             other_entity_names = entity.get('otherEntityNames', {})
-            if isinstance(other_entity_names, dict):
-                other_entity_names_list = other_entity_names.get('OtherEntityName', [""])
-            else:
-                other_entity_names_list = [""]
+            other_entity_names_list = other_entity_names.get('OtherEntityName', [""]) if isinstance(other_entity_names, dict) else [""]
 
             other_addresses = entity.get('otherAddresses', {})
-            if isinstance(other_addresses, dict):
-                other_addresses_list = other_addresses.get('OtherAddress', [{"type": "", "lang": "", "FirstAddressLine": "", "City": "", "Country": "", "PostalCode": ""}])
-            else:
-                other_addresses_list = [{"type": "", "lang": "", "FirstAddressLine": "", "City": "", "Country": "", "PostalCode": ""}]
+            other_addresses_list = other_addresses.get('OtherAddress', [{"type": "", "lang": "", "FirstAddressLine": "", "City": "", "Country": "", "PostalCode": ""}]) if isinstance(other_addresses, dict) else [{"type": "", "lang": "", "FirstAddressLine": "", "City": "", "Country": "", "PostalCode": ""}]
+
+            # Structured legal name
+            legal_name_data = entity.get("legalName", {})
+            legal_name_structured = {
+                "name": legal_name_data.get("name", ""),
+                "language": legal_name_data.get("language", "")
+            }
 
             mapped_record = {
                 "_id": record.get("id", ""),
                 "LEI": attributes.get("lei", ""),
                 "Entity": {
-                    "LegalName": entity.get("legalName", ""),
+                    "LegalName": legal_name_structured,
                     "OtherEntityNames": {
                         "OtherEntityName": other_entity_names_list
                     },
@@ -86,13 +96,18 @@ def get_lei_records(legal_name="", city="", postal_code=""):
                     }
                 }
             }
-            mapped_records.append(mapped_record)
+
+            # Clean up empty values in the mapped record
+            cleaned_record = clean_empty_values(mapped_record)
+            mapped_records.append(cleaned_record)
+
         return mapped_records
     else:
         return {"error": f"Error: {response.status_code}"}
 
 @app.get("/lei-records/")
-def lei_records(legal_name: str = Query(default="", title="Legal Name"), 
-                city: str = Query(default="", title="City"), 
-                postal_code: str = Query(default="", title="Postal Code")):
+def lei_records(
+    legal_name: str = Query(default="", title="Legal Name"), 
+    city: str = Query(default="", title="City"), 
+    postal_code: str = Query(default="", title="Postal Code")):
     return get_lei_records(legal_name, city, postal_code)
